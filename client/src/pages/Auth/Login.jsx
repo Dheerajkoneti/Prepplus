@@ -56,7 +56,23 @@ function Login() {
       localStorage.setItem("userId", res.data._id);
       localStorage.setItem("name", res.data.name);
       localStorage.setItem("email", res.data.email);
-
+      localStorage.setItem("role", res.data.role || "student");
+      try {
+        await API.post(
+          "/progress/login-streak",
+          {},
+          {
+            headers: {
+              Authorization: `Bearer ${res.data.token}`,
+            },
+          }
+        );
+      } catch (streakError) {
+        console.error(
+          "Failed to record login streak:",
+          streakError
+        );
+      }
       showToast(
         "Login Successful! Redirecting to dashboard... 🚀",
         "success"

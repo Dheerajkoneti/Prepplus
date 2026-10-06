@@ -12,13 +12,29 @@ const chatRoutes = require("./routes/chatRoutes");
 const authRoutes = require("./routes/authRoutes");
 const notesRoutes = require("./routes/notesRoutes");
 const youtubeRoutes = require("./routes/youtubeRoutes");
+const progressRoutes =
+  require("./routes/progressRoutes");
+
+const mockTestRoutes = require(
+  "./routes/mockTestRoutes"
+);
+const mockInterviewRoutes = require(
+  "./routes/mockInterviewRoutes"
+);
 console.log(
   "GEMINI KEY:",
   process.env.GEMINI_API_KEY
     ? "Loaded"
     : "Missing"
 );
-
+const healthRoutes = require("./routes/healthRoutes");
+const resourceRoutes = require("./routes/resourceRoutes");
+const leaderboardRoutes =
+  require("./routes/leaderboardRoutes");
+const habitRoutes =
+  require("./routes/habitRoutes");
+const notificationRoutes = require("./routes/notificationRoutes");
+const settingsRoutes = require("./routes/settingsRoutes");
 // Middleware
 app.use(cors());
 
@@ -45,8 +61,39 @@ app.use(
   "/api/chat",
   chatRoutes
 );
+app.use(
+  "/api/mock-test",
+  mockTestRoutes
+);
+app.use(
+  "/api/mock-interview",
+  mockInterviewRoutes
+);
+app.use(
+  "/api/progress",
+  progressRoutes
+);
 app.use("/api/notes", notesRoutes);
 app.use("/api/youtube", youtubeRoutes);
+app.use("/api/health", healthRoutes);
+app.use("/api/resources", resourceRoutes);
+app.use(
+  "/api/notifications",
+  notificationRoutes
+);
+
+app.use(
+  "/api/settings",
+  settingsRoutes
+);
+app.use(
+  "/api/leaderboard",
+  leaderboardRoutes
+);
+app.use(
+  "/api/habits",
+  habitRoutes
+);
 const startServer = async () => {
   try {
     await connectDB();

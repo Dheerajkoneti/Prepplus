@@ -1,5 +1,7 @@
 const express = require("express");
-const router = express.Router();
+
+const router =
+  express.Router();
 
 const {
   generateNotes,
@@ -9,21 +11,58 @@ const {
   deleteNote,
 } = require("../controllers/notesController");
 
-const { protect } = require("../middleware/authMiddleware");
+const {
+  protect,
+} = require("../middleware/authMiddleware");
 
-// Generate AI Notes
-router.post("/generate", generateNotes);
+// ============================================================
+// AI NOTES
+// ============================================================
 
-// Save Note
-router.post("/save", protect, saveNote);
+router.post(
+  "/generate",
+  protect,
+  generateNotes
+);
 
-// Get Notes
-router.get("/", protect, getNotes);
+// ============================================================
+// SAVE NOTE
+// ============================================================
 
-// Get Single Note
-router.get("/:id", protect, getNoteById);
+router.post(
+  "/save",
+  protect,
+  saveNote
+);
 
-// Delete Note
-router.delete("/:id", protect, deleteNote);
+// ============================================================
+// GET ALL NOTES
+// ============================================================
+
+router.get(
+  "/",
+  protect,
+  getNotes
+);
+
+// ============================================================
+// GET SINGLE NOTE
+// ============================================================
+
+router.get(
+  "/:id",
+  protect,
+  getNoteById
+);
+
+// ============================================================
+// DELETE NOTE
+// ============================================================
+
+router.delete(
+  "/:id",
+  protect,
+  deleteNote
+);
 
 module.exports = router;
