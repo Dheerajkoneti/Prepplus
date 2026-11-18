@@ -4,6 +4,7 @@ import App from "./App";
 import "./index.css";
 
 import { GoogleOAuthProvider } from "@react-oauth/google";
+import { NotificationProvider } from "./context/NotificationContext";
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>

@@ -160,6 +160,9 @@ function Dashboard() {
 
   const [lastUpdated, setLastUpdated] = useState(null);
 
+  const [unreadNotificationCount, setUnreadNotificationCount] =
+    useState(0);
+
   const userName = localStorage.getItem("name") || "Learner";
   const token = localStorage.getItem("token");
 
@@ -278,6 +281,115 @@ function Dashboard() {
       );
     };
   }, [fetchAnalytics]);
+  /* =========================================================
+     NOTIFICATION BADGE
+  ========================================================= */
+
+  const fetchUnreadNotificationCount = useCallback(async () => {
+    const currentToken = localStorage.getItem("token") || token;
+
+    if (!currentToken) {
+      setUnreadNotificationCount(0);
+      return;
+    }
+
+    try {
+      const response = await API.get("/notifications", {
+        headers: {
+          Authorization: `Bearer ${currentToken}`,
+        },
+      });
+
+      const data = response?.data || {};
+
+      /*
+- Prefer an unread count supplied by the backend.
+- If the backend does not provide one, calculate it
+- from the returned notification objects.
+       */
+      const backendUnreadCount =
+        data?.unreadCount ??
+        data?.unread ??
+        data?.meta?.unreadCount ??
+        data?.pagination?.unreadCount;
+
+      const numericBackendCount = Number(backendUnreadCount);
+
+      if (Number.isFinite(numericBackendCount)) {
+        setUnreadNotificationCount(
+          Math.max(0, Math.floor(numericBackendCount))
+        );
+        return;
+      }
+
+      const notifications =
+        data?.notifications ||
+        data?.data ||
+        data?.results ||
+        [];
+
+      if (!Array.isArray(notifications)) {
+        setUnreadNotificationCount(0);
+        return;
+      }
+
+      const unread = notifications.filter((notification) => {
+        if (!notification || typeof notification !== "object") {
+          return false;
+        }
+
+        /* Common backend field names */
+        if (notification.isRead !== undefined) {
+          return (
+            notification.isRead === false ||
+            notification.isRead === 0 ||
+            notification.isRead === "false"
+          );
+        }
+
+        if (notification.read !== undefined) {
+          return (
+            notification.read === false ||
+            notification.read === 0 ||
+            notification.read === "false"
+          );
+        }
+
+        if (notification.readAt !== undefined) {
+          return !notification.readAt;
+        }
+
+        if (notification.status !== undefined) {
+          return String(notification.status).toLowerCase() === "unread";
+        }
+
+        return false;
+      }).length;
+
+      setUnreadNotificationCount(unread);
+    } catch (notificationError) {
+      /*
+- Notification failures must never break the dashboard.
+- Keep the existing badge value and only log the error.
+       */
+      console.error(
+        "❌ Notification badge error:",
+        notificationError
+      );
+    }
+  }, [token]);
+
+  useEffect(() => {
+    fetchUnreadNotificationCount();
+
+    const interval = setInterval(() => {
+      fetchUnreadNotificationCount();
+    }, 5000);
+
+    return () => {
+      clearInterval(interval);
+    };
+  }, [fetchUnreadNotificationCount]);
 
   /* =========================================================
      LOGOUT
@@ -785,7 +897,7 @@ function Dashboard() {
   return (
     <div style={styles.app}>
       <style>{`
-        * {
+* {
           box-sizing: border-box;
         }
 
@@ -868,6 +980,59 @@ function Dashboard() {
           box-shadow:
             inset 3px 0 0 #c084fc,
             0 8px 25px rgba(124,58,237,.08);
+        }
+
+        .notification-badge {
+          position: absolute;
+          top: -9px;
+          right: -10px;
+          min-width: 20px;
+          height: 20px;
+          padding: 0 5px;
+          border-radius: 999px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: linear-gradient(135deg, #ef4444, #ec4899);
+          color: #ffffff;
+          border: 2px solid rgba(10,10,16,.98);
+          font-size: 10px;
+          font-weight: 900;
+          line-height: 1;
+          white-space: nowrap;
+          box-shadow: 0 4px 15px rgba(239,68,68,.5);
+          z-index: 20;
+          pointer-events: none;
+          animation: notificationBadgePulse 2s ease-in-out infinite;
+        }
+
+        .notification-badge-inline {
+          min-width: 22px;
+          height: 22px;
+          padding: 0 6px;
+          border-radius: 999px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          background: linear-gradient(135deg, #ef4444, #ec4899);
+          color: #ffffff;
+          font-size: 10px;
+          font-weight: 900;
+          line-height: 1;
+          white-space: nowrap;
+          box-shadow: 0 4px 12px rgba(239,68,68,.4);
+          animation: notificationBadgePulse 2s ease-in-out infinite;
+        }
+
+        @keyframes notificationBadgePulse {
+          0%, 100% {
+            transform: scale(1);
+            box-shadow: 0 4px 12px rgba(239,68,68,.35);
+          }
+          50% {
+            transform: scale(1.08);
+            box-shadow: 0 5px 20px rgba(239,68,68,.65);
+          }
         }
 
         .glass-card {
@@ -1414,18 +1579,48 @@ function Dashboard() {
                 : ""
             }`}
             onClick={() => navigateTo("/notifications")}
-            title={!isSidebarOpen ? "Notifications" : ""}
+            title={
+              !isSidebarOpen
+                ? `Notifications${
+                    unreadNotificationCount > 0
+                      ? ` (${unreadNotificationCount} unread)`
+                      : ""
+                  }`
+                : ""
+            }
+            style={{
+              position: "relative",
+            }}
           >
+            {/* Bell + notification badge */}
             <span
               style={{
-                color:
-                  window.location.pathname === "/notifications"
-                    ? "#f59e0b"
-                    : "#f59e0b",
+                position: "relative",
+                width: "22px",
+                height: "22px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
                 flexShrink: 0,
               }}
             >
-              <FiBell size={19} />
+              <FiBell
+                size={19}
+                style={{
+                  color: "#f59e0b",
+                }}
+              />
+
+              {unreadNotificationCount > 0 && (
+                <span
+                  className="notification-badge"
+                  aria-label={`${unreadNotificationCount} unread notifications`}
+                >
+                  {unreadNotificationCount > 99
+                    ? "99+"
+                    : unreadNotificationCount}
+                </span>
+              )}
             </span>
 
             {isSidebarOpen && (
@@ -1436,9 +1631,59 @@ function Dashboard() {
                     window.location.pathname === "/notifications"
                       ? 700
                       : 500,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  flex: 1,
+                  minWidth: 0,
                 }}
               >
-                Notifications
+                <span>Notifications</span>
+
+                {unreadNotificationCount > 0 && (
+                  <span className="notification-badge-inline">
+                    {unreadNotificationCount > 99
+                      ? "99+"
+                      : unreadNotificationCount}
+                  </span>
+                )}
+              </span>
+            )}
+          </button>
+
+          {/* Feedback */}
+          <button
+            className={`sidebar-nav-item ${
+              window.location.pathname === "/feedback"
+                ? "active"
+                : ""
+            }`}
+            onClick={() => navigateTo("/feedback")}
+            title={!isSidebarOpen ? "Feedback" : ""}
+          >
+            <span
+              style={{
+                color:
+                  window.location.pathname === "/feedback"
+                    ? "#c084fc"
+                    : "#38bdf8",
+                flexShrink: 0,
+              }}
+            >
+              <FiMessageSquare size={19} />
+            </span>
+
+            {isSidebarOpen && (
+              <span
+                style={{
+                  fontSize: ".84rem",
+                  fontWeight:
+                    window.location.pathname === "/feedback"
+                      ? 700
+                      : 500,
+                }}
+              >
+                Feedback
               </span>
             )}
           </button>

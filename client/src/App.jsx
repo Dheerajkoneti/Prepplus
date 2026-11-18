@@ -32,6 +32,16 @@ import ProgressTracker from "./pages/Progress/ProgressTracker";
 import ResourceHub from "./pages/Resources/ResourceHub";
 import Leaderboard from "./pages/Leaderboard/Leaderboard";
 import Habits from "./pages/Habits/HabitTracker";
+import Courses from "./pages/courses/Courses";
+import CourseLanguage from "./pages/courses/CourseLanguage";
+import CourseDetails from "./pages/courses/CourseDetails";
+import TopicLearning from "./pages/courses/TopicLearning";
+import TopicExam from "./pages/courses/TopicExam";
+import FinalExam from "./pages/courses/FinalExam";
+import CourseCompleted from "./pages/courses/CourseCompleted";
+import Certificate from "./pages/courses/Certificate";
+import CertificateVerification from "./pages/courses/CertificateVerification";
+import Feedback from "./pages/Feedback";
 function App() {
   return (
     <BrowserRouter>
@@ -323,9 +333,13 @@ function App() {
           />
 
           <Route
-            path="/settings"
-            element={<Settings />}
-          />
+          path="/settings"
+          element={
+            <ProtectedRoute>
+              <Settings />
+            </ProtectedRoute>
+          }
+        />
           <Route
             path="/habits"
             element={
@@ -335,6 +349,55 @@ function App() {
             }
           />
 
+          {/* =========================
+              COURSES
+          ========================= */}
+
+          <Route
+            path="/courses"
+            element={<Courses />}
+          />
+
+          <Route
+            path="/courses/language/:language"
+            element={<CourseLanguage />}
+          />
+
+          <Route
+            path="/courses/:courseId"
+            element={<CourseDetails />}
+          />
+
+          <Route
+            path="/courses/:courseId/topic/:topicId"
+            element={<TopicLearning />}
+          />
+
+          <Route
+            path="/courses/:courseId/topic/:topicId/exam"
+            element={<TopicExam />}
+          />
+
+          <Route
+            path="/courses/:courseId/final-exam"
+            element={<FinalExam />}
+          />
+
+          <Route
+            path="/courses/:courseId/completed"
+            element={<CourseCompleted />}
+          />
+
+          <Route
+            path="/courses/:courseId/certificate"
+            element={<Certificate />}
+          />
+
+          <Route
+            path="/courses/certificate/verify/:certificateId"
+            element={<CertificateVerification />}
+          />
+          <Route path="/feedback" element={<Feedback />} />
           {/* =================================================
               404
           ================================================= */}

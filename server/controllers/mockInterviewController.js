@@ -1563,7 +1563,7 @@ const getInterviewReport = async (
       ];
 
       const wasAlreadyCompleted =
-    interview.reportGenerated === true;
+      interview.reportGenerated === true;
 
       interview.reportGenerated = true;
 

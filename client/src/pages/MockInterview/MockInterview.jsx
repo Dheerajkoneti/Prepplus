@@ -46,9 +46,12 @@ import {
   StopCircle,
   LogOut,
   Check,
+  Smartphone,
 } from "lucide-react";
 
+import "@tensorflow/tfjs";
 import * as faceapi from "face-api.js";
+import * as cocoSsd from "@tensorflow-models/coco-ssd";
 
 /* =========================================================
    CONFIGURATION
@@ -59,14 +62,15 @@ const API_URL =
   "http://localhost:5000";
 
 const MAX_SECURITY_WARNINGS = 3;
-
 const FACE_MISS_LIMIT = 3;
-
 const FACE_CHECK_INTERVAL = 1500;
-
 const CLIENT_SECURITY_COOLDOWN = 3000;
-
 const QUESTION_TIME = 60;
+const FACE_TURN_LIMIT = 2;
+const FACE_YAW_THRESHOLD = 0.16;
+const FACE_PITCH_THRESHOLD = 0.68;
+const PHONE_DETECTION_INTERVAL = 2000;
+const PHONE_CONFIDENCE_THRESHOLD = 0.60;
 
 
 /* =========================================================
@@ -113,33 +117,26 @@ function MockInterview() {
   /* =======================================================
      REFS
   ======================================================= */
-
   const videoRef = useRef(null);
-
   const streamRef = useRef(null);
-
   const faceTimerRef = useRef(null);
-
   const speechRecognitionRef = useRef(null);
-
   const speechSynthesisRef = useRef(null);
-
   const securityLastSentRef = useRef({});
-
   const finishingRef = useRef(false);
-
   const mountedRef = useRef(true);
-
   const fullscreenRequestRef = useRef(false);
-
   const faceMissCountRef = useRef(0);
-
+  const phoneDetectionRunningRef = useRef(false);
+  const lastPhoneEventRef = useRef(0);
+  const faceTurnCountRef = useRef(0);
+  const phoneDetectionTimerRef = useRef(null);
+  const phoneDetectorRef = useRef(null);
+  const phoneWasDetectedRef = useRef(false);
+  const phoneConsecutiveCountRef = useRef(0);
   const cameraEnabledRef = useRef(false);
-
   const microphoneEnabledRef = useRef(false);
-
   const currentQuestionRef = useRef(0);
-
   const interviewRef = useRef(null);
 
 
@@ -200,6 +197,15 @@ function MockInterview() {
   const [faceModelReady, setFaceModelReady] =
     useState(false);
 
+  const [phoneModelLoading, setPhoneModelLoading] =
+    useState(false);
+
+  const [phoneModelReady, setPhoneModelReady] =
+    useState(false);
+
+  const [phoneDetected, setPhoneDetected] =
+    useState(false);
+
 
   /* =======================================================
      SPEECH STATE
@@ -247,7 +253,10 @@ function MockInterview() {
     microphoneDisconnects: 0,
     copyPasteAttempts: 0,
   });
-
+  const [showSecurityWarning, setShowSecurityWarning] =
+  useState(false);
+  const [securityMessage, setSecurityMessage] =
+  useState("");
 
   /* =======================================================
      FULLSCREEN STATE
@@ -291,6 +300,96 @@ function MockInterview() {
     );
   };
 
+
+  /* =======================================================
+    SECURITY EVENT
+  ======================================================= */
+
+  const sendSecurityEvent = useCallback(
+    async (type, message) => {
+      if (
+        !id ||
+        finishingRef.current
+      ) {
+        return;
+      }
+
+      // ---------------------------------------------------
+      // SHOW WARNING IMMEDIATELY
+      // ---------------------------------------------------
+
+      setSecurityMessage(
+        message ||
+          "Security warning detected."
+      );
+
+      setShowSecurityWarning(true);
+
+      // ---------------------------------------------------
+      // CLIENT COOLDOWN
+      // ---------------------------------------------------
+
+      const now = Date.now();
+
+      const last =
+        securityLastSentRef.current[type] ||
+        0;
+
+      if (
+        now - last <
+        CLIENT_SECURITY_COOLDOWN
+      ) {
+        return;
+      }
+
+      securityLastSentRef.current[type] =
+        now;
+
+      try {
+        const response =
+          await apiRequest({
+            method: "POST",
+            url: `${API_URL}/api/mock-interview/${id}/security-event`,
+            data: {
+              type,
+              message,
+            },
+          });
+
+        const serverSecurity =
+          response.data?.security;
+
+        if (serverSecurity) {
+          setSecurity((prev) => ({
+            ...prev,
+            ...serverSecurity,
+          }));
+        }
+
+        // -------------------------------------------------
+        // TERMINATED
+        // -------------------------------------------------
+
+        if (
+          response.data?.terminated ||
+          serverSecurity?.status ===
+            "Terminated"
+        ) {
+          setSecurityMessage(
+            "Interview terminated because the maximum security violation limit was reached."
+          );
+
+          setShowSecurityWarning(true);
+        }
+      } catch (error) {
+        console.error(
+          "Security event error:",
+          error
+        );
+      }
+    },
+    [id]
+  );
 
   /* =======================================================
      LOAD INTERVIEW
@@ -419,22 +518,43 @@ function MockInterview() {
         setFaceModelLoading(true);
 
         console.log(
-          "Loading face detection model..."
+          "Loading face detection models..."
         );
 
         const MODEL_URL = "/models";
 
-        await faceapi.nets.tinyFaceDetector.loadFromUri(
-          MODEL_URL
-        );
+        // Face detector
+        if (
+          !faceapi.nets.tinyFaceDetector.isLoaded
+        ) {
+          await faceapi.nets.tinyFaceDetector.loadFromUri(
+            MODEL_URL
+          );
+        }
 
         console.log(
-          "Face model loaded successfully."
+          "Tiny face detector loaded."
+        );
+
+        // Face landmarks
+        if (
+          !faceapi.nets.faceLandmark68Net.isLoaded
+        ) {
+          await faceapi.nets.faceLandmark68Net.loadFromUri(
+            MODEL_URL
+          );
+        }
+
+        console.log(
+          "Face landmark model loaded."
         );
 
         if (mountedRef.current) {
           setFaceModelReady(true);
           setFaceModelLoading(false);
+          setFaceStatus(
+            "Face + head position detection ready"
+          );
         }
 
         return true;
@@ -446,6 +566,8 @@ function MockInterview() {
 
         if (mountedRef.current) {
           setFaceModelLoading(false);
+          setFaceModelReady(false);
+
           setFaceStatus(
             "Face model unavailable"
           );
@@ -457,6 +579,177 @@ function MockInterview() {
     [faceModelReady]
   );
 
+
+  /* =======================================================
+     LOAD PHONE / OBJECT DETECTION MODEL
+  ======================================================= */
+
+  const loadPhoneModel = useCallback(async () => {
+    if (phoneDetectorRef.current) {
+      setPhoneModelReady(true);
+      return true;
+    }
+
+    try {
+      setPhoneModelLoading(true);
+
+      console.log("Loading phone detection model...");
+
+      const detector = await cocoSsd.load({
+        base: "lite_mobilenet_v2",
+      });
+
+      phoneDetectorRef.current = detector;
+
+      if (mountedRef.current) {
+        setPhoneModelReady(true);
+        setPhoneModelLoading(false);
+      }
+
+      console.log("Phone detection model loaded.");
+      return true;
+    } catch (error) {
+      console.error("Phone detection model loading failed:", error);
+
+      if (mountedRef.current) {
+        setPhoneModelReady(false);
+        setPhoneModelLoading(false);
+      }
+
+      return false;
+    }
+  }, []);
+
+  /* =======================================================
+     START PHONE DETECTION
+  ======================================================= */
+
+  const startPhoneDetection = useCallback(() => {
+    if (phoneDetectionTimerRef.current) {
+      clearInterval(phoneDetectionTimerRef.current);
+      phoneDetectionTimerRef.current = null;
+    }
+
+    if (!videoRef.current || !phoneDetectorRef.current) {
+      console.warn(
+        "Phone detection cannot start: video or model is not ready."
+      );
+      return;
+    }
+
+    phoneWasDetectedRef.current = false;
+    phoneConsecutiveCountRef.current = 0;
+    setPhoneDetected(false);
+
+    phoneDetectionTimerRef.current = window.setInterval(async () => {
+      if (phoneDetectionRunningRef.current) {
+        return;
+      }
+
+      const video = videoRef.current;
+      const detector = phoneDetectorRef.current;
+
+      if (
+        !video ||
+        !detector ||
+        video.readyState < 2 ||
+        video.videoWidth === 0 ||
+        !cameraEnabledRef.current ||
+        finishingRef.current
+      ) {
+        return;
+      }
+
+      phoneDetectionRunningRef.current = true;
+
+      try {
+        // COCO-SSD detects objects in the live camera frame.
+        // We only care about the "cell phone" class.
+        const predictions = await detector.detect(
+          video,
+          20,
+          PHONE_CONFIDENCE_THRESHOLD
+        );
+
+        const phone = predictions.find(
+          (prediction) =>
+            String(prediction.class || "").toLowerCase() ===
+              "cell phone" &&
+            Number(prediction.score || 0) >=
+              PHONE_CONFIDENCE_THRESHOLD
+        );
+
+        const detected = Boolean(phone);
+
+        if (detected) {
+          phoneConsecutiveCountRef.current += 1;
+          setPhoneDetected(true);
+
+          const confidence = Math.round(
+            Number(phone.score || 0) * 100
+          );
+
+          // Require two consecutive detections so one bad
+          // prediction does not immediately create a strike.
+          if (
+            phoneConsecutiveCountRef.current >= 2 &&
+            !phoneWasDetectedRef.current
+          ) {
+            phoneWasDetectedRef.current = true;
+            lastPhoneEventRef.current = Date.now();
+
+            const message =
+              `Warning: A mobile phone was detected in the camera ` +
+              `(${confidence}% confidence). Please remove the phone from view.`;
+
+            setSecurityMessage(message);
+            setShowSecurityWarning(true);
+
+            /*
+             * Your current backend already accepts FACE_NOT_DETECTED
+             * as a security violation. We intentionally use that
+             * existing event so this frontend works with your current
+             * backend without requiring a backend schema change.
+             *
+             * Later, PHONE_DETECTED can be added as a dedicated
+             * backend event if you want separate phone statistics.
+             */
+            await sendSecurityEvent(
+              "PHONE_DETECTED",
+              "Mobile phone detected in the candidate camera view."
+            );
+          }
+        } else {
+          phoneConsecutiveCountRef.current = 0;
+          phoneWasDetectedRef.current = false;
+          setPhoneDetected(false);
+        }
+      } catch (error) {
+        console.error(
+          "Phone detection error:",
+          error
+        );
+      } finally {
+        phoneDetectionRunningRef.current = false;
+      }
+    }, PHONE_DETECTION_INTERVAL);
+  }, [sendSecurityEvent]);
+
+  /* =======================================================
+     STOP PHONE DETECTION
+  ======================================================= */
+
+  const stopPhoneDetection = useCallback(() => {
+    if (phoneDetectionTimerRef.current) {
+      clearInterval(phoneDetectionTimerRef.current);
+      phoneDetectionTimerRef.current = null;
+    }
+
+    phoneWasDetectedRef.current = false;
+    phoneConsecutiveCountRef.current = 0;
+    phoneDetectionRunningRef.current = false;
+    setPhoneDetected(false);
+  }, []);
 
   /* =======================================================
      START FACE DETECTION
@@ -478,8 +771,7 @@ function MockInterview() {
 
     faceTimerRef.current = setInterval(
       async () => {
-        const video =
-          videoRef.current;
+        const video = videoRef.current;
 
         if (
           !video ||
@@ -491,13 +783,15 @@ function MockInterview() {
 
         try {
           const detections =
-            await faceapi.detectAllFaces(
-              video,
-              new faceapi.TinyFaceDetectorOptions({
-                inputSize: 320,
-                scoreThreshold: 0.35,
-              })
-            );
+            await faceapi
+              .detectAllFaces(
+                video,
+                new faceapi.TinyFaceDetectorOptions({
+                  inputSize: 320,
+                  scoreThreshold: 0.35,
+                })
+              )
+              .withFaceLandmarks();
 
           if (!mountedRef.current) {
             return;
@@ -508,8 +802,14 @@ function MockInterview() {
 
           setFaceCount(count);
 
+          // ==================================================
+          // NO FACE
+          // ==================================================
+
           if (count === 0) {
             faceMissCountRef.current += 1;
+
+            faceTurnCountRef.current = 0;
 
             if (
               faceMissCountRef.current >=
@@ -519,6 +819,12 @@ function MockInterview() {
                 "Face not detected"
               );
 
+              setSecurityMessage(
+                "Warning: Your face is not visible. Please remain clearly visible to the camera."
+              );
+
+              setShowSecurityWarning(true);
+
               sendSecurityEvent(
                 "FACE_NOT_DETECTED",
                 "Candidate face was not detected."
@@ -527,27 +833,229 @@ function MockInterview() {
               faceMissCountRef.current = 0;
             } else {
               setFaceStatus(
-                "Checking..."
+                "Checking face..."
               );
             }
-          } else if (count === 1) {
-            faceMissCountRef.current = 0;
 
-            setFaceStatus(
-              "Face detected"
-            );
-          } else {
+            return;
+          }
+
+          // ==================================================
+          // MULTIPLE FACES
+          // ==================================================
+
+          if (count > 1) {
             faceMissCountRef.current = 0;
+            faceTurnCountRef.current = 0;
 
             setFaceStatus(
               "Multiple faces detected"
             );
 
+            setSecurityMessage(
+              "Warning: Multiple faces were detected. Only the candidate should be visible."
+            );
+
+            setShowSecurityWarning(true);
+
             sendSecurityEvent(
               "MULTIPLE_FACE_DETECTED",
               "Multiple faces were detected."
             );
+
+            return;
           }
+
+          // ==================================================
+          // EXACTLY ONE FACE
+          // ==================================================
+
+          faceMissCountRef.current = 0;
+
+          const detection =
+            detections[0];
+
+          const landmarks =
+            detection.landmarks;
+
+          if (!landmarks) {
+            setFaceStatus(
+              "Face detected"
+            );
+
+            return;
+          }
+
+          // ==================================================
+          // GET LANDMARK POINTS
+          // ==================================================
+
+          const leftEye =
+            landmarks.getLeftEye();
+
+          const rightEye =
+            landmarks.getRightEye();
+
+          const nose =
+            landmarks.getNose();
+
+          if (
+            !leftEye?.length ||
+            !rightEye?.length ||
+            !nose?.length
+          ) {
+            setFaceStatus(
+              "Face detected"
+            );
+
+            return;
+          }
+
+          // ==================================================
+          // CALCULATE EYE CENTER
+          // ==================================================
+
+          const getCenter = (points) => {
+            const total = points.reduce(
+              (acc, point) => ({
+                x: acc.x + point.x,
+                y: acc.y + point.y,
+              }),
+              {
+                x: 0,
+                y: 0,
+              }
+            );
+
+            return {
+              x: total.x / points.length,
+              y: total.y / points.length,
+            };
+          };
+
+          const leftEyeCenter =
+            getCenter(leftEye);
+
+          const rightEyeCenter =
+            getCenter(rightEye);
+
+          const noseCenter =
+            getCenter(nose);
+
+          // ==================================================
+          // HEAD ORIENTATION
+          // ==================================================
+
+          const eyeCenter = {
+            x:
+              (leftEyeCenter.x +
+                rightEyeCenter.x) /
+              2,
+
+            y:
+              (leftEyeCenter.y +
+                rightEyeCenter.y) /
+              2,
+          };
+
+          const faceBox = detection.detection?.box;
+
+          const faceWidth = Math.max(
+            faceBox?.width || 1,
+            1
+          );
+
+          const faceHeight = Math.max(
+            faceBox?.height || 1,
+            1
+          );
+
+          // Normalize nose position against the complete face
+          // instead of eye distance. This is much more stable
+          // across different camera distances.
+          const yawRatio =
+            (noseCenter.x -
+              eyeCenter.x) /
+            faceWidth;
+
+          const noseVerticalPosition =
+            (noseCenter.y -
+              eyeCenter.y) /
+            faceHeight;
+
+          const turnedLeft =
+            yawRatio <
+            -FACE_YAW_THRESHOLD;
+
+          const turnedRight =
+            yawRatio >
+            FACE_YAW_THRESHOLD;
+
+          // A large vertical displacement usually means the
+          // candidate is looking substantially up/down.
+          const lookingTooFar =
+            Math.abs(
+              noseVerticalPosition
+            ) >
+            FACE_PITCH_THRESHOLD;
+
+          const headTurned =
+            turnedLeft ||
+            turnedRight ||
+            lookingTooFar;
+
+          // ==================================================
+          // HEAD TURN DETECTED
+          // ==================================================
+
+          if (headTurned) {
+            faceTurnCountRef.current += 1;
+
+            let direction =
+              "away";
+
+            if (turnedLeft) {
+              direction = "left";
+            } else if (turnedRight) {
+              direction = "right";
+            } else {
+              direction = "up/down";
+            }
+
+            setFaceStatus(
+              `Please face the camera (${faceTurnCountRef.current}/${FACE_TURN_LIMIT})`
+            );
+
+            if (
+              faceTurnCountRef.current >=
+              FACE_TURN_LIMIT
+            ) {
+              setSecurityMessage(
+                `Warning: You turned your face ${direction}. Please look directly at the camera.`
+              );
+
+              setShowSecurityWarning(true);
+
+              sendSecurityEvent(
+                "FACE_NOT_DETECTED",
+                `Candidate turned their face ${direction} away from the camera.`
+              );
+
+              faceTurnCountRef.current = 0;
+            }
+
+            return;
+          }
+
+          // ==================================================
+          // FACE CENTERED
+          // ==================================================
+
+          faceTurnCountRef.current = 0;
+
+          setFaceStatus(
+            "Face centered"
+          );
         } catch (error) {
           console.error(
             "Face detection error:",
@@ -557,8 +1065,10 @@ function MockInterview() {
       },
       FACE_CHECK_INTERVAL
     );
-  }, [faceModelReady]);
-
+  }, [
+    faceModelReady,
+    sendSecurityEvent,
+  ]);
 
   /* =======================================================
      STOP FACE DETECTION
@@ -571,6 +1081,7 @@ function MockInterview() {
     }
 
     faceMissCountRef.current = 0;
+    faceTurnCountRef.current = 0;
   }, []);
 
 
@@ -760,12 +1271,19 @@ function MockInterview() {
         const modelReady =
           await loadFaceModels();
 
+        const phoneModelReadyNow =
+          await loadPhoneModel();
+
         if (modelReady) {
           setFaceStatus(
             "Checking face..."
           );
 
           startFaceDetection();
+        }
+
+        if (phoneModelReadyNow) {
+          startPhoneDetection();
         }
       } catch (error) {
         console.error(
@@ -818,7 +1336,10 @@ function MockInterview() {
     },
     [
       loadFaceModels,
+      loadPhoneModel,
       startFaceDetection,
+      startPhoneDetection,
+      sendSecurityEvent,
     ]
   );
 
@@ -829,6 +1350,7 @@ function MockInterview() {
 
   const stopMedia = useCallback(() => {
     stopFaceDetection();
+    stopPhoneDetection();
 
     if (streamRef.current) {
       streamRef.current
@@ -862,67 +1384,10 @@ function MockInterview() {
     setFaceCount(0);
 
     setFaceStatus("Searching");
-  }, [stopFaceDetection]);
+    setPhoneModelLoading(false);
+  }, [stopFaceDetection, stopPhoneDetection]);
 
 
-  /* =======================================================
-     SECURITY EVENT
-  ======================================================= */
-
-  const sendSecurityEvent = useCallback(
-    async (
-      type,
-      message
-    ) => {
-      if (!id) {
-        return;
-      }
-
-      const now = Date.now();
-
-      const last =
-        securityLastSentRef.current[type] ||
-        0;
-
-      if (
-        now - last <
-        CLIENT_SECURITY_COOLDOWN
-      ) {
-        return;
-      }
-
-      securityLastSentRef.current[type] =
-        now;
-
-      try {
-        const response =
-          await apiRequest({
-            method: "POST",
-            url: `${API_URL}/api/mock-interview/${id}/security-event`,
-            data: {
-              type,
-              message,
-            },
-          });
-
-        const serverSecurity =
-          response.data?.security;
-
-        if (serverSecurity) {
-          setSecurity((prev) => ({
-            ...prev,
-            ...serverSecurity,
-          }));
-        }
-      } catch (error) {
-        console.error(
-          "Security event error:",
-          error
-        );
-      }
-    },
-    [id]
-  );
 
 
   /* =======================================================
@@ -1076,8 +1541,6 @@ function MockInterview() {
       goToNextQuestion();
     }
   };
-
-
   /* =======================================================
      FORMAT TIMER
   ======================================================= */
@@ -1651,6 +2114,38 @@ function MockInterview() {
 
 
   /* =======================================================
+     START PROCTORING
+  ======================================================= */
+
+  const startProctoring = async () => {
+    // Fullscreen must be requested from this real user click.
+    try {
+      if (!document.fullscreenElement) {
+        await document.documentElement.requestFullscreen();
+      }
+
+      setIsFullscreen(
+        Boolean(document.fullscreenElement)
+      );
+      fullscreenRequestRef.current = true;
+    } catch (error) {
+      console.warn(
+        "Could not enter fullscreen:",
+        error
+      );
+
+      setIsFullscreen(false);
+
+      setSecurityMessage(
+        "Fullscreen could not be enabled. Please click the Enter Fullscreen button and allow fullscreen."
+      );
+      setShowSecurityWarning(true);
+    }
+
+    await startMedia();
+  };
+
+  /* =======================================================
      FULLSCREEN
   ======================================================= */
 
@@ -1664,12 +2159,12 @@ function MockInterview() {
           return;
         }
 
+        fullscreenRequestRef.current =
+          true;
+
         await document.documentElement.requestFullscreen();
 
         setIsFullscreen(true);
-
-        fullscreenRequestRef.current =
-          true;
       } catch (error) {
         console.warn(
           "Fullscreen request failed:",
@@ -1726,18 +2221,33 @@ function MockInterview() {
   ======================================================= */
 
   useEffect(() => {
-    const handleVisibility =
-      () => {
-        if (
-          document.visibilityState ===
-          "hidden"
-        ) {
-          sendSecurityEvent(
-            "TAB_SWITCH",
-            "Candidate switched away from the interview tab."
-          );
-        }
-      };
+    const handleVisibility = () => {
+      if (
+        finishingRef.current
+      ) {
+        return;
+      }
+
+      if (
+        document.visibilityState ===
+        "hidden"
+      ) {
+        // IMPORTANT:
+        // Show the warning before the browser
+        // hides the page.
+
+        setSecurityMessage(
+          "Warning: You switched away from the interview tab. Return to the interview and do not switch tabs again."
+        );
+
+        setShowSecurityWarning(true);
+
+        sendSecurityEvent(
+          "TAB_SWITCH",
+          "Candidate switched away from the interview tab."
+        );
+      }
+    };
 
     document.addEventListener(
       "visibilitychange",
@@ -2029,7 +2539,121 @@ function MockInterview() {
       <GlobalStyles />
 
       <div className="pp-page">
+      {showSecurityWarning &&
+      securityStatus !== "Terminated" && (
+        <div
+          style={{
+            position: "fixed",
+            right: "24px",
+            bottom: "24px",
+            zIndex: 99999,
+            width: "min(420px, calc(100vw - 32px))",
+            background:
+              "rgba(20, 10, 10, 0.97)",
+            border:
+              "1px solid rgba(239, 68, 68, 0.55)",
+            borderRadius: "16px",
+            padding: "18px",
+            boxShadow:
+              "0 20px 60px rgba(0,0,0,0.45)",
+            backdropFilter: "blur(16px)",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "flex-start",
+              gap: "12px",
+            }}
+          >
+            <div
+              style={{
+                width: "42px",
+                height: "42px",
+                borderRadius: "12px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background:
+                  "rgba(239, 68, 68, 0.15)",
+                color: "#ef4444",
+                flexShrink: 0,
+              }}
+            >
+              <ShieldAlert size={22} />
+            </div>
 
+            <div
+              style={{
+                flex: 1,
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent:
+                    "space-between",
+                  gap: "10px",
+                }}
+              >
+                <h3
+                  style={{
+                    margin: 0,
+                    color: "#fff",
+                    fontSize: "16px",
+                    fontWeight: 800,
+                  }}
+                >
+                  Security Warning
+                </h3>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setShowSecurityWarning(
+                      false
+                    )
+                  }
+                  style={{
+                    border: "none",
+                    background: "transparent",
+                    color: "#94a3b8",
+                    cursor: "pointer",
+                  }}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <p
+                style={{
+                  margin:
+                    "8px 0 0",
+                  color: "#cbd5e1",
+                  fontSize: "13px",
+                  lineHeight: 1.5,
+                }}
+              >
+                {securityMessage}
+              </p>
+
+              <div
+                style={{
+                  marginTop: "12px",
+                  color: "#fbbf24",
+                  fontSize: "12px",
+                  fontWeight: 800,
+                }}
+              >
+                Security Strikes:{" "}
+                {security.violationCount}/
+                {MAX_SECURITY_WARNINGS}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
         {/* ===============================================
             HEADER
         =============================================== */}
@@ -2127,6 +2751,28 @@ function MockInterview() {
               )}
 
               Reconnect Media
+            </button>
+
+
+            <button
+              type="button"
+              className="pp-reconnect-header"
+              onClick={
+                enterFullscreen
+              }
+              disabled={
+                finishing ||
+                isFullscreen
+              }
+            >
+              {isFullscreen ? (
+                <Lock size={16} />
+              ) : (
+                <Maximize2 size={16} />
+              )}
+              {isFullscreen
+                ? "Fullscreen Active"
+                : "Enter Fullscreen"}
             </button>
 
 
@@ -2235,7 +2881,9 @@ function MockInterview() {
               <StatusPill
                 active={
                   faceStatus ===
-                  "Face detected"
+                    "Face detected" ||
+                  faceStatus ===
+                    "Face centered"
                 }
                 icon={Eye}
                 label={
@@ -2243,7 +2891,31 @@ function MockInterview() {
                 }
                 success={
                   faceStatus ===
-                  "Face detected"
+                    "Face detected" ||
+                  faceStatus ===
+                    "Face centered"
+                }
+              />
+
+
+              <StatusPill
+                active={
+                  phoneModelReady &&
+                  !phoneDetected
+                }
+                icon={Smartphone}
+                label={
+                  phoneModelLoading
+                    ? "Loading Phone AI..."
+                    : phoneDetected
+                      ? "Phone Detected"
+                      : phoneModelReady
+                        ? "Phone Clear"
+                        : "Phone AI Offline"
+                }
+                success={
+                  phoneModelReady &&
+                  !phoneDetected
                 }
               />
 
@@ -2339,7 +3011,7 @@ function MockInterview() {
                       type="button"
                       className="pp-enable-media-btn"
                       onClick={
-                        startMedia
+                        startProctoring
                       }
                       disabled={
                         mediaLoading
@@ -2507,7 +3179,28 @@ function MockInterview() {
                   }
                   success={
                     faceStatus ===
-                    "Face detected"
+                      "Face detected" ||
+                    faceStatus ===
+                      "Face centered"
+                  }
+                />
+
+
+                <MediaCard
+                  icon={Smartphone}
+                  title="Phone"
+                  value={
+                    phoneModelLoading
+                      ? "Loading..."
+                      : phoneDetected
+                        ? "Detected"
+                        : phoneModelReady
+                          ? "Clear"
+                          : "Unavailable"
+                  }
+                  success={
+                    phoneModelReady &&
+                    !phoneDetected
                   }
                 />
 

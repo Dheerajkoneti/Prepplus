@@ -17,6 +17,17 @@ const userSettingsSchema = new mongoose.Schema(
         default: "dark",
       },
 
+      accentColor: {
+        type: String,
+        enum: [
+          "cyan",
+          "purple",
+          "blue",
+          "green",
+        ],
+        default: "cyan",
+      },
+
       compactMode: {
         type: Boolean,
         default: false,
@@ -69,14 +80,24 @@ const userSettingsSchema = new mongoose.Schema(
       dailyGoal: {
         type: Number,
         min: 15,
-        max: 1440,
+        max: 720,
         default: 120,
       },
 
       preferredDifficulty: {
         type: String,
-        enum: ["beginner", "intermediate", "advanced"],
-        default: "intermediate",
+        enum: [
+          "easy",
+          "medium",
+          "hard",
+          "mixed",
+        ],
+        default: "mixed",
+      },
+
+      preferredTopics: {
+        type: [String],
+        default: [],
       },
 
       reminderEnabled: {
@@ -86,7 +107,7 @@ const userSettingsSchema = new mongoose.Schema(
 
       reminderTime: {
         type: String,
-        default: "18:00",
+        default: "19:00",
       },
     },
   },
@@ -95,7 +116,8 @@ const userSettingsSchema = new mongoose.Schema(
   }
 );
 
-module.exports = mongoose.model(
-  "UserSettings",
-  userSettingsSchema
-);
+module.exports =
+  mongoose.model(
+    "UserSettings",
+    userSettingsSchema
+  );

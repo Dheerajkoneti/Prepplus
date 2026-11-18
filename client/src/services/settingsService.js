@@ -1,12 +1,22 @@
 import API from "./api";
 
+/*
+=========================================================
+GET SETTINGS
+=========================================================
+*/
+
 export const getSettings = async () => {
-  const response = await API.get(
-    "/settings"
-  );
+  const response = await API.get("/settings");
 
   return response.data;
 };
+
+/*
+=========================================================
+UPDATE SETTINGS
+=========================================================
+*/
 
 export const updateSettings = async (
   settings
@@ -19,10 +29,17 @@ export const updateSettings = async (
   return response.data;
 };
 
+/*
+=========================================================
+RESET SETTINGS
+=========================================================
+*/
+
 export const resetSettings = async () => {
-  const response = await API.post(
-    "/settings/reset"
-  );
+  const response =
+    await API.post(
+      "/settings/reset"
+    );
 
   return response.data;
 };

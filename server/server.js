@@ -35,6 +35,13 @@ const habitRoutes =
   require("./routes/habitRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const settingsRoutes = require("./routes/settingsRoutes");
+const courseRoutes = require("./routes/courseRoutes");
+const topicRoutes = require("./routes/topicRoutes");
+const lessonRoutes = require("./routes/lessonRoutes");
+const examRoutes = require("./routes/examRoutes");
+const certificateRoutes = require("./routes/certificateRoutes");
+const feedbackRoutes = require("./routes/feedbackRoutes");
+
 // Middleware
 app.use(cors());
 
@@ -56,7 +63,7 @@ app.use(
   "/api/resume",
   resumeRoutes
 );
-
+app.use("/api/feedback", feedbackRoutes);
 app.use(
   "/api/chat",
   chatRoutes
@@ -94,6 +101,11 @@ app.use(
   "/api/habits",
   habitRoutes
 );
+app.use("/api/courses", courseRoutes);
+app.use("/api/topics", topicRoutes);
+app.use("/api/lessons", lessonRoutes);
+app.use("/api/exams", examRoutes);
+app.use("/api/certificates", certificateRoutes);
 const startServer = async () => {
   try {
     await connectDB();
